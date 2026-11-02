@@ -1,0 +1,21 @@
+[project]
+name = "linkedin-ads-mcp"
+version = "0.1.0"
+description = "Betamodus: MCP-Server für LinkedIn-Kampagnendaten (nur lesen)"
+authors = [{ name = "Betamodus GmbH" }]
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=2.10",
+    "httpx>=0.27",
+    "keyring>=25",
+]
+
+[project.scripts]
+linkedin-ads-mcp = "linkedin_ads_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/linkedin_ads_mcp"]
