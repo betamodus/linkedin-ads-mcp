@@ -1,6 +1,6 @@
 [project]
 name = "linkedin-ads-mcp"
-version = "0.1.0"
+version = "0.2.2"
 description = "Betamodus: MCP-Server für LinkedIn-Kampagnendaten (nur lesen)"
 authors = [{ name = "Betamodus GmbH" }]
 requires-python = ">=3.10"
@@ -16,6 +16,10 @@ linkedin-ads-mcp = "linkedin_ads_mcp.server:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+# Bei jeder Code-Änderung neu bauen, nicht nur bei Änderungen an dieser Datei.
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.py" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/linkedin_ads_mcp"]

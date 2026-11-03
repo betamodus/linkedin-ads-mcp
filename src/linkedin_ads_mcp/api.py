@@ -1,4 +1,10 @@
-"""Dünner Client für die LinkedIn Marketing API (versionierte REST-Endpunkte)."""
+"""Dünner Client für die LinkedIn Marketing API (versionierte REST-Endpunkte).
+
+Begriffe: Die API nennt die Ebenen anders als der Campaign Manager.
+  API campaignGroup  = Campaign Manager „Kampagne“
+  API campaign       = Campaign Manager „Anzeigengruppe“
+  API creative       = Campaign Manager „Anzeige“
+"""
 
 from __future__ import annotations
 
@@ -12,6 +18,7 @@ import httpx
 from .auth import get_access_token
 
 BASE = "https://api.linkedin.com/rest"
+BASE_V2 = "https://api.linkedin.com/v2"
 
 # LinkedIn unterstützt jede Version mindestens ein Jahr. Jährlich nachziehen.
 LINKEDIN_VERSION = os.environ.get("LINKEDIN_API_VERSION", "202610")
@@ -21,7 +28,9 @@ ANALYTICS_MAX_ELEMENTS = 15000
 
 
 class LinkedInError(RuntimeError):
-    pass
+    def __init__(self, msg: str, status: int | None = None):
+        super().__init__(msg)
+        self.status = status
 
 
 def enc(value: str) -> str:
@@ -45,41 +54,56 @@ def campaign_urn(campaign_id: int | str) -> str:
     return f"urn:li:sponsoredCampaign:{campaign_id}"
 
 
+def creative_urn(creative_id: int | str) -> str:
+    return f"urn:li:sponsoredCreative:{creative_id}"
+
+
 def urn_id(urn: str) -> str:
-    return urn.rsplit(":", 1)[-1]
+    return str(urn).rsplit(":", 1)[-1]
 
 
-async def get(path: str, query: str = "") -> dict[str, Any]:
+async def get(
+    path: str,
+    query: str = "",
+    *,
+    base: str = BASE,
+    versioned: bool = True,
+    method: str | None = None,
+) -> dict[str, Any]:
     """GET mit fertig kodiertem Query-String (Rest.li-Syntax darf nicht doppelt kodiert werden)."""
     token = await get_access_token()
-    url = f"{BASE}{path}" + (f"?{query}" if query else "")
+    url = f"{base}{path}" + (f"?{query}" if query else "")
     headers = {
         "Authorization": f"Bearer {token}",
-        "LinkedIn-Version": LINKEDIN_VERSION,
         "X-Restli-Protocol-Version": "2.0.0",
     }
+    if versioned:
+        headers["LinkedIn-Version"] = LINKEDIN_VERSION
+    if method:
+        headers["X-RestLi-Method"] = method
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.get(url, headers=headers)
     if r.status_code == 200:
         return r.json()
     detail = r.text[:500]
-    if r.status_code == 401:
+    s = r.status_code
+    if s == 401:
         raise LinkedInError(
-            "LinkedIn lehnt die Anmeldung ab (401). Bitte neu anmelden (Werkzeug `login`)."
+            "LinkedIn lehnt die Anmeldung ab (401). Bitte neu anmelden (Werkzeug `login`).", s
         )
-    if r.status_code == 403:
+    if s == 403:
         raise LinkedInError(
             f"Kein Zugriff (403). Entweder fehlt der App das Recht, oder dein LinkedIn-Konto "
-            f"hat keine Rolle auf diesem Werbekonto. Details: {detail}"
+            f"hat keine Rolle auf diesem Werbekonto. Details: {detail}", s
         )
-    if r.status_code == 426:
+    if s == 426:
         raise LinkedInError(
             f"API-Version {LINKEDIN_VERSION} wird nicht mehr unterstützt (426). "
-            f"LINKEDIN_API_VERSION aktualisieren. Details: {detail}"
+            f"LINKEDIN_API_VERSION aktualisieren. Details: {detail}", s
         )
-    if r.status_code == 429:
-        raise LinkedInError("LinkedIn drosselt die Anfragen (429). Kurz warten und erneut versuchen.")
-    raise LinkedInError(f"LinkedIn-Fehler {r.status_code}: {detail}")
+    if s == 429:
+        raise LinkedInError("LinkedIn drosselt die Anfragen (429). Kurz warten und erneut versuchen.", s)
+    raise LinkedInError(f"LinkedIn-Fehler {s}: {detail}", s)
 
 
 # --- Konten -------------------------------------------------------------------
@@ -103,35 +127,77 @@ async def ad_account(account_id: int | str) -> dict:
     return await get(f"/adAccounts/{account_id}")
 
 
-# --- Kampagnen ----------------------------------------------------------------
+# --- Kampagnen (API: campaign groups) und Anzeigengruppen (API: campaigns) ----
 
 ALL_VISIBLE_STATUSES = ["ACTIVE", "PAUSED", "ARCHIVED", "COMPLETED", "CANCELED", "DRAFT"]
+GROUP_STATUSES = ["ACTIVE", "PAUSED", "ARCHIVED", "CANCELED", "DRAFT"]
 
 
-async def search_campaigns(account_id: int | str, statuses: list[str] | None = None) -> list[dict]:
-    statuses = statuses or ALL_VISIBLE_STATUSES
-    search = f"(status:(values:List({','.join(statuses)})))"
+async def _search_all(path: str, search: str, page_size: int = 500) -> list[dict]:
     out, token = [], None
     while True:
-        q = f"q=search&search={search}&pageSize=500"
+        q = f"q=search&search={search}&pageSize={page_size}"
         if token:
             q += f"&pageToken={enc(token)}"
-        data = await get(f"/adAccounts/{account_id}/adCampaigns", q)
+        data = await get(path, q)
         out.extend(data.get("elements", []))
         token = data.get("metadata", {}).get("nextPageToken")
         if not token:
             return out
 
 
-async def campaign_names(account_id: int | str, campaign_ids: list[str]) -> dict[str, str]:
-    names: dict[str, str] = {}
-    ids = list(dict.fromkeys(campaign_ids))
-    for i in range(0, len(ids), 100):
-        chunk = ids[i : i + 100]
-        data = await get(f"/adAccounts/{account_id}/adCampaigns", f"ids=List({','.join(chunk)})")
-        for cid, c in data.get("results", {}).items():
-            names[str(cid)] = c.get("name", "")
-    return names
+async def search_campaigns(account_id: int | str, statuses: list[str] | None = None) -> list[dict]:
+    """Anzeigengruppen (API: campaigns) eines Kontos."""
+    statuses = statuses or ALL_VISIBLE_STATUSES
+    return await _search_all(
+        f"/adAccounts/{account_id}/adCampaigns",
+        f"(status:(values:List({','.join(statuses)})))",
+    )
+
+
+async def search_campaign_groups(account_id: int | str) -> list[dict]:
+    """Kampagnen (API: campaign groups) eines Kontos."""
+    return await _search_all(
+        f"/adAccounts/{account_id}/adCampaignGroups",
+        f"(status:(values:List({','.join(GROUP_STATUSES)})))",
+    )
+
+
+# --- Anzeigen (API: creatives) ------------------------------------------------
+
+async def _creatives_finder(account_id: int | str, extra: str) -> list[dict]:
+    out: list[dict] = []
+    token = None
+    while True:
+        q = f"q=criteria{extra}&pageSize=100"
+        if token:
+            q += f"&pageToken={enc(token)}"
+        data = await get(f"/adAccounts/{account_id}/creatives", q, method="FINDER")
+        out.extend(data.get("elements", []))
+        token = data.get("metadata", {}).get("nextPageToken")
+        if not token:
+            return out
+
+
+async def creatives_by_ids(account_id: int | str, creative_urns: list[str]) -> list[dict]:
+    """Anzeigen eines Kontos nach URN.
+
+    Gezielte Abfrage nach URN. Enthält die Liste Anzeigen anderer Konten, lehnt
+    LinkedIn das teils mit einem Serverfehler ab; dann werden alle Anzeigen des
+    Kontos geholt und gefiltert.
+    """
+    urns = list(dict.fromkeys(creative_urns))
+    wanted = set(urns)
+    try:
+        out: list[dict] = []
+        for i in range(0, len(urns), 50):  # URL-Länge begrenzen
+            out += await _creatives_finder(account_id, f"&creatives={rest_list(urns[i : i + 50])}")
+        return out
+    except LinkedInError as e:
+        if e.status in (401, 429):
+            raise
+    everything = await _creatives_finder(account_id, "")
+    return [c for c in everything if str(c.get("id")) in wanted]
 
 
 # --- Kennzahlen ---------------------------------------------------------------
