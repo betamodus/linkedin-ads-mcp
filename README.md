@@ -110,12 +110,32 @@ claude mcp add linkedin-ads \
 * **Geldbeträge** werden auf 2 Nachkommastellen gerundet angezeigt, gerechnet wird mit den genauen Werten.
 * **Leere Antwort heißt nicht null.** Hat die Person auf einem Konto keine Rolle, liefert LinkedIn keine Daten und keinen Fehler.
 
+## Für die Pflege: Abgleich mit dem Campaign Manager
+
+Vor jeder neuen Version prüfen, ob alle Zahlen noch mit dem Campaign Manager übereinstimmen. Für die tägliche Nutzung nicht nötig.
+
+**1. Referenz exportieren** (Campaign Manager, je Werbekonto)
+Anzeigengruppen-Ansicht, Filter zurücksetzen, Zeitraum „Alle“ → Exportieren → „Performance der Anzeigengruppe“, Spaltenansicht „Alle Spalten“, „nach Monat sortiert“. Die Dateien heißen `account_<id>_campaign_performance_report.csv`.
+
+**2. Prüfen**
+
+```bash
+uvx --from git+https://github.com/betamodus/linkedin-ads-mcp linkedin-ads-mcp pruefen ~/Downloads
+```
+
+Geprüft wird über dieselbe Funktion, die Claude aufruft: je Anzeigengruppe und Monat alle Rohwerte und berechneten Kennzahlen, für die letzten 6 Monate zusätzlich Reichweite, Häufigkeit, Verweilzeit und Videowiedergabezeit (Anzahl Monate als zweites Argument). Am Ende steht, wie viele Werte geprüft wurden und welche abweichen.
+
+Bekannte, harmlose Abweichungen: einzelne Reaktionen (LinkedIn zählt nach), Videowiedergabezeit um wenige Sekunden (Rundung im Campaign Manager).
+
+Die Exporte enthalten Kundendaten und gehören nie in dieses Repository.
+
 ## Befehle im Terminal
 
 ```bash
 uvx --from git+https://github.com/betamodus/linkedin-ads-mcp linkedin-ads-mcp login    # anmelden
 uvx --from git+https://github.com/betamodus/linkedin-ads-mcp linkedin-ads-mcp status   # Anmeldung prüfen
 uvx --from git+https://github.com/betamodus/linkedin-ads-mcp linkedin-ads-mcp logout   # Token löschen
+uvx --from git+https://github.com/betamodus/linkedin-ads-mcp linkedin-ads-mcp pruefen ~/Downloads   # Abgleich mit Campaign-Manager-Exporten
 ```
 
 Für `login` müssen `LINKEDIN_CLIENT_ID` und `LINKEDIN_CLIENT_SECRET` als Umgebungsvariablen gesetzt sein.

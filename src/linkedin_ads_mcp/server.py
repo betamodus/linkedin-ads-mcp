@@ -831,6 +831,9 @@ def main() -> None:
         print("Abgemeldet.")
     elif cmd == "status":
         print(json.dumps(token_status(), ensure_ascii=False, indent=2))
+    elif cmd == "pruefen":
+        from . import pruefen
+        sys.exit(pruefen.main(sys.argv[2:]))
     else:
         mcp.run()
 
