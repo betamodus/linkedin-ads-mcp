@@ -1,6 +1,6 @@
 [project]
 name = "linkedin-ads-mcp"
-version = "0.4.0"
+version = "0.4.1"
 description = "Betamodus: MCP-Server für LinkedIn-Kampagnendaten (nur lesen)"
 authors = [{ name = "Betamodus GmbH" }]
 requires-python = ">=3.10"

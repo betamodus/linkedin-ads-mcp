@@ -63,8 +63,10 @@ zusammen. Die Zeilen überschneiden sich oder lassen Teile weg: Ihre Summe lag i
 Branchen bei 255 % der echten Kosten, bei Jobtiteln bei 59 %, Conversions oft unter 30 %. \
 Gesamtwerte und Anteile immer aus 'gesamt_laut_konten' nehmen, nie Zeilen aufaddieren; \
 'abdeckung_prozent' mit nennen.
-- Video-Quoten (video_view_rate_prozent, video_abschlussquote_prozent) beziehen sich auf \
-Videostarts. Der Campaign Manager rechnet auf Video-Impressionen; Abweichung rund 1 Prozentpunkt.
+- Video-Quoten (video_view_rate_prozent, video_abschlussquote_prozent) sind wie im Campaign \
+Manager auf die Impressionen der Videoanzeigen bezogen und gibt es nur bei Aufschlüsselung nach \
+Anzeigengruppe oder Anzeige. Für ein Konto oder eine Kampagne nach Anzeigengruppe aufschlüsseln \
+und die Summen nehmen.
 - 'gebot' in list_campaign_structure fehlt bei automatischer Gebotsstrategie (MAX_*): Dort setzt \
 LinkedIn die Kosten selbst.
 - Einheiten nicht selbsterklärender Felder stehen in list_metrics unter 'einheiten' \
@@ -187,12 +189,16 @@ DERIVED: list[tuple[str, str, str, float]] = [
     ("kosten_pro_conversion", "costInLocalCurrency", "externalWebsiteConversions", 1),
     ("lead_formular_abschlussquote_prozent", "oneClickLeads", "oneClickLeadFormOpens", 100),
     ("frequenz", "impressions", "approximateMemberReach", 1),
-    # Video-Quoten auf Videostarts bezogen, nicht auf alle Impressionen: sonst drücken
-    # Bildanzeigen derselben Kampagne die Quote. Der Campaign Manager rechnet auf
-    # Video-Impressionen, die die API nicht getrennt liefert (Abweichung ~1 Prozentpunkt).
-    ("video_view_rate_prozent", "videoViews", "videoStarts", 100),
-    ("video_abschlussquote_prozent", "videoCompletions", "videoStarts", 100),
+    # Video-Quoten wie im Campaign Manager: bezogen auf die Impressionen der Videoanzeigen
+    # (videoImpressions = Impressionen von Zeilen mit Videostarts). Geprüft gegen
+    # CM-Exporte. Nur bei Aufschlüsselung nach Anzeigengruppe oder Anzeige vorhanden,
+    # weil Konto- und Kampagnenzeilen Bild und Video mischen.
+    ("video_view_rate_prozent", "videoViews", "videoImpressions", 100),
+    ("video_abschlussquote_prozent", "videoCompletions", "videoImpressions", 100),
 ]
+
+# Aufschlüsselungen, deren Zeilen genau ein Anzeigenformat haben.
+FORMAT_PURE_PIVOTS = {"CAMPAIGN", "CREATIVE"}
 
 # Einheiten, die nicht selbsterklärend sind; geprüft gegen den Campaign Manager.
 UNITS = {
@@ -200,6 +206,7 @@ UNITS = {
     "averageVideoWatchTime": "Millisekunden (9.739 = 9,74 Sek.)",
     "videoWatchTime": "Millisekunden",
     "audiencePenetration": "Anteil von 0 bis 1 (0,737 = 73,7 %)",
+    "videoImpressions": "berechnet: Impressionen der Anzeigengruppen bzw. Anzeigen mit Videostarts",
 }
 
 # Anteile (0 bis 1) brauchen mehr Nachkommastellen als 2.
@@ -700,6 +707,15 @@ async def get_analytics(
             row.update(_derived(r))
             return _drop_none(row)
 
+        # Nenner der Video-Quoten (siehe DERIVED): nur wo jede Zeile genau ein Format hat.
+        if pivot in FORMAT_PURE_PIVOTS and "videoStarts" in fields and "impressions" in fields:
+            for r in rows:
+                if _num(r.get("videoStarts")) > 0:
+                    r["videoImpressions"] = r.get("impressions")
+        elif {"videoViews", "videoCompletions"} & set(fields) and not demographic:
+            hinweise.append("Video-Quoten gibt es nur bei Aufschlüsselung nach Anzeigengruppe oder "
+                            "Anzeige (wie im Campaign Manager auf die Impressionen der Videoanzeigen bezogen).")
+
         rows.sort(key=lambda r: (_date_str((r.get("dateRange") or {}).get("start")) or "",
                                  -_num(r.get(rank))))
         out_rows = [build(r) for r in rows]
@@ -711,6 +727,8 @@ async def get_analytics(
                     continue
                 if any(f in r for r in rs):
                     t[f] = sum(_num(r.get(f)) for r in rs)
+            if any("videoImpressions" in r for r in rs):
+                t["videoImpressions"] = sum(_num(r.get("videoImpressions")) for r in rs)
             return t
 
         tot = totals_of(rows)
