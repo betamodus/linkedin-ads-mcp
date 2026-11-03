@@ -21,9 +21,17 @@ Der Server verwendet die Begriffe des Campaign Managers. Die API nennt die Ebene
 | `login` | LinkedIn-Anmeldung im Browser (einmalig, danach automatische Erneuerung) |
 | `auth_status` | Zeigt, ob und wie lange die Anmeldung gültig ist |
 | `list_ad_accounts` | Werbekonten mit Name, Währung, Status, eigener Rolle |
-| `list_campaign_structure` | Kampagnen mit ihren Anzeigengruppen: Status, Ziel, Laufzeit, Budgets, Gebot, Ausgaben seit Start, Budgetauslastung |
-| `get_analytics` | Kennzahlen nach Zeitraum und Aufschlüsselung (Konto, Kampagne, Anzeigengruppe, Anzeige, Demografie) mit Namen in Klartext. Berechnet CTR, CPC, CPM, Kosten pro Lead, Kosten pro Conversion, Lead-Formular-Abschlussquote, Frequenz sowie Summen. Optional nur die Top N (`max_rows`). |
-| `list_metrics` | Alle verfügbaren Kennzahlen und Einschränkungen |
+| `list_campaign_structure` | Kampagnen mit ihren Anzeigengruppen: Status, Ziel, Laufzeit, Budgets, Gebot, Ausgaben seit Start, Auslastung des Gesamtbudgets |
+| `get_analytics` | Kennzahlen nach Zeitraum und Aufschlüsselung (Konto, Kampagne, Anzeigengruppe, Anzeige, Demografie). Jede Zeile trägt ihren vollständigen Pfad Werbekonto > Kampagne > Anzeigengruppe > Anzeige. Berechnete Kennzahlen (CTR, Engagement-Rate, CPC, CPM, Kosten pro Lead/Conversion, Lead-Formular-Abschlussquote, Frequenz, Video-Quoten) und Summen. Optional nur die Top N Einträge (`max_rows`), bei Zeitreihen mit allen Zeiträumen. |
+| `list_metrics` | Alle verfügbaren Kennzahlen, Formeln der berechneten Kennzahlen und Einschränkungen |
+
+## Grundsätze im Code
+
+1. Jede Zeile ist für sich verständlich (vollständiger Pfad).
+2. Berechnet wird nur, was zwingend aus den gelieferten Daten folgt. Alle Formeln stehen in einer Tabelle (`DERIVED` in `server.py`); eine neue Kennzahl ist eine Zeile.
+3. Nichts verschwindet stillschweigend: Angefragte, aber nicht gelieferte Kennzahlen und gekürzte Antworten werden gemeldet.
+4. Alle Werkzeuge antworten über denselben Ausgabeweg mit derselben Größenbremse.
+5. Fachwissen über LinkedIn (Attribution, Reichweite, Demografie) steht in den Server-Anweisungen (`INSTRUCTIONS`), nicht als Sonderregel im Code.
 
 ## Einrichtung in Claude Desktop (macOS)
 
