@@ -101,7 +101,9 @@ claude mcp add linkedin-ads \
 * **Eigene LinkedIn-App.** Nie mit den Zugangsdaten einer anderen App betreiben. Eine Anmeldung mit zusätzlichen Rechten entwertet bei LinkedIn bestehende Tokens derselben App.
 * **Rücksprung-Adresse** muss in der LinkedIn-App exakt `http://localhost:8765/callback` lauten.
 * **API-Version** steht in `api.py` (`202610`) und lässt sich per Umgebungsvariable `LINKEDIN_API_VERSION` überschreiben. LinkedIn unterstützt jede Version mindestens ein Jahr.
-* **Demografie** (`MEMBER_*`): Werte sind von LinkedIn geschätzt, kleine Gruppen fehlen. Namen werden live bei LinkedIn nachgeschlagen; wo LinkedIn keinen Klartext liefert (z. B. einzelne neuere Branchen), bleibt die Kennung stehen und die Antwort sagt das.
+* **Demografie** (`MEMBER_*`): Werte sind von LinkedIn geschätzt. Die Zeilen überschneiden sich oder lassen Teile weg, ihre Summe ist kein Gesamtwert (im Test bei Branchen 255 %, bei Jobtiteln 59 % der echten Kosten). Die Antwort enthält deshalb die echten Gesamtwerte (`gesamt_laut_konten`) und den erfassten Anteil (`abdeckung_prozent`). Namen werden live bei LinkedIn nachgeschlagen, nur für die Einträge, die in der Antwort landen; wo LinkedIn keinen Klartext liefert, bleibt die Kennung stehen und die Antwort sagt das.
+* **Einheiten:** `averageVideoWatchTime` in Millisekunden, `audiencePenetration` als Anteil von 0 bis 1, `averageDwellTime` in Sekunden (geprüft gegen den Campaign Manager).
+* **Gebot:** Bei automatischer Gebotsstrategie (`MAX_*`) zeigt `list_campaign_structure` kein Gebot, nur die Strategie.
 * **Anzeigen ohne Namen** werden mit ID und Anzeigengruppe bezeichnet. Den Post-Text liefert LinkedIn nur mit Rechten auf der Unternehmensseite.
 * **Größenbremse:** Antworten über 35.000 Zeichen werden gekürzt (Zeilen mit den höchsten Kosten bleiben, Summen enthalten immer alles). Einstellbar per Umgebungsvariable `LINKEDIN_MCP_MAX_CHARS`.
 * **Geldbeträge** werden auf 2 Nachkommastellen gerundet angezeigt, gerechnet wird mit den genauen Werten.

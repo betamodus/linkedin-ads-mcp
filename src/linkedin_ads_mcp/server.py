@@ -55,9 +55,20 @@ Laufzeit inklusive Nachlauf betrachten und auf diesen Effekt hinweisen.
 Zeilen oder Zeiträume addieren; Frequenz = Impressionen / Reichweite gilt nur je Zeile. \
 LinkedIn liefert Reichweite nur für Zeiträume bis etwa 92 Tage (geprüft: 61 Tage ja, \
 123 Tage nein) und nicht bei Demografie. Für längere Zeiträume in Abschnitte bis 3 Monate teilen.
-- Demografische Aufschlüsselungen (MEMBER_*) sind geschätzt, lassen kleine Gruppen weg und \
-fassen alle abgefragten Konten zusammen. Summen, besonders bei Conversions, liegen oft deutlich \
-unter den Gesamtwerten.
+- Kosten pro Lead oder Conversion auf Konto-, Kampagnen- oder Demografieebene enthalten auch \
+Ausgaben von Anzeigengruppen mit anderem Ziel. Für Bewertungen auf Anzeigengruppen mit \
+passendem Ziel eingrenzen (Feld 'ziel' in list_campaign_structure) und das dazusagen.
+- Demografische Aufschlüsselungen (MEMBER_*) sind geschätzt und fassen alle abgefragten Konten \
+zusammen. Die Zeilen überschneiden sich oder lassen Teile weg: Ihre Summe lag im Test bei \
+Branchen bei 255 % der echten Kosten, bei Jobtiteln bei 59 %, Conversions oft unter 30 %. \
+Gesamtwerte und Anteile immer aus 'gesamt_laut_konten' nehmen, nie Zeilen aufaddieren; \
+'abdeckung_prozent' mit nennen.
+- Video-Quoten (video_view_rate_prozent, video_abschlussquote_prozent) beziehen sich auf \
+Videostarts. Der Campaign Manager rechnet auf Video-Impressionen; Abweichung rund 1 Prozentpunkt.
+- 'gebot' in list_campaign_structure fehlt bei automatischer Gebotsstrategie (MAX_*): Dort setzt \
+LinkedIn die Kosten selbst.
+- Einheiten nicht selbsterklärender Felder stehen in list_metrics unter 'einheiten' \
+(z. B. averageVideoWatchTime in Millisekunden, audiencePenetration als Anteil 0 bis 1).
 - Tageswerte gibt es rund 6 Monate rückwirkend, Monatswerte bis 10 Jahre, Demografie 2 Jahre.
 - Leere Ergebnisse bedeuten entweder keine Auslieferung oder keine Leserechte; LinkedIn meldet \
 fehlende Rechte nicht als Fehler.
@@ -176,9 +187,27 @@ DERIVED: list[tuple[str, str, str, float]] = [
     ("kosten_pro_conversion", "costInLocalCurrency", "externalWebsiteConversions", 1),
     ("lead_formular_abschlussquote_prozent", "oneClickLeads", "oneClickLeadFormOpens", 100),
     ("frequenz", "impressions", "approximateMemberReach", 1),
-    ("video_view_rate_prozent", "videoViews", "impressions", 100),
+    # Video-Quoten auf Videostarts bezogen, nicht auf alle Impressionen: sonst drücken
+    # Bildanzeigen derselben Kampagne die Quote. Der Campaign Manager rechnet auf
+    # Video-Impressionen, die die API nicht getrennt liefert (Abweichung ~1 Prozentpunkt).
+    ("video_view_rate_prozent", "videoViews", "videoStarts", 100),
     ("video_abschlussquote_prozent", "videoCompletions", "videoStarts", 100),
 ]
+
+# Einheiten, die nicht selbsterklärend sind; geprüft gegen den Campaign Manager.
+UNITS = {
+    "averageDwellTime": "Sekunden",
+    "averageVideoWatchTime": "Millisekunden (9.739 = 9,74 Sek.)",
+    "videoWatchTime": "Millisekunden",
+    "audiencePenetration": "Anteil von 0 bis 1 (0,737 = 73,7 %)",
+}
+
+# Anteile (0 bis 1) brauchen mehr Nachkommastellen als 2.
+FRACTION_FIELDS = {"audiencePenetration"}
+
+# Höchstzahl demografischer Werte, deren Namen pro Antwort nachgeschlagen werden.
+# Mehr passt ohnehin nicht in eine Antwort.
+NAME_LOOKUP_LIMIT = 300
 
 METRIC_GROUPS = {
     "Kosten & Reichweite": [
@@ -200,7 +229,7 @@ METRIC_GROUPS = {
     "Video": [
         "videoStarts", "videoViews", "videoFirstQuartileCompletions",
         "videoMidpointCompletions", "videoThirdQuartileCompletions", "videoCompletions",
-        "averageVideoWatchTime", "fullScreenPlays",
+        "videoWatchTime", "averageVideoWatchTime", "fullScreenPlays",
     ],
     "Dokument-Anzeigen": [
         "documentFirstQuartileCompletions", "documentMidpointCompletions",
@@ -253,6 +282,8 @@ def _clean(field: str, v):
     if isinstance(v, float):
         if field in MONEY_FIELDS:
             return round(v, 2)
+        if field in FRACTION_FIELDS:
+            return round(v, 4)
         return int(v) if v.is_integer() else round(v, 2)
     return v
 
@@ -475,7 +506,11 @@ async def list_campaign_structure(
                 "id": cid, "anzeigengruppe": c.get("name"), "status": c.get("status"),
                 "ziel": c.get("objectiveType"), "format": c.get("type"), "start": s, "ende": e,
                 "tagesbudget": _money(c.get("dailyBudget")), "gesamtbudget": _money(c.get("totalBudget")),
-                "gebotsart": c.get("costType"), "gebot": _money(c.get("unitCost")),
+                "gebotsart": c.get("costType"), "gebotsstrategie": c.get("optimizationTargetType"),
+                # Bei automatischer Gebotsabgabe (MAX_*) gibt es kein eigenes Gebot; LinkedIn
+                # lässt dort beliebige Restwerte stehen.
+                "gebot": None if str(c.get("optimizationTargetType") or "").startswith("MAX_")
+                         else _money(c.get("unitCost")),
             }
             gid = api.urn_id(c["campaignGroup"]) if c.get("campaignGroup") else "ohne"
             by_group.setdefault(gid, []).append(_drop_none(with_spend(row, "CAMPAIGN", cid, row["gesamtbudget"])))
@@ -565,12 +600,21 @@ async def get_analytics(
             return _error(ValueError(f"Höchstens {MAX_METRICS} Kennzahlen pro Abfrage."))
 
         ctx = Context(account_ids)
-        rows, _ = await asyncio.gather(
+        jobs = [
             api.analytics(account_ids=account_ids, start=start, end=end, pivot=pivot,
                           granularity=time_granularity, fields=fields + ["dateRange", "pivotValues"],
                           campaign_ids=campaign_ids),
             ctx.load_accounts(),
-        )
+        ]
+        # Demografie: Zeilen überschneiden sich oder fehlen. Die echten Gesamtwerte kommen
+        # aus derselben Abfrage auf Kontoebene (Grundsatz 3).
+        if demographic:
+            jobs.append(api.analytics(account_ids=account_ids, start=start, end=end, pivot="ACCOUNT",
+                                      granularity="ALL", fields=fields + ["pivotValues"],
+                                      campaign_ids=campaign_ids))
+        res = await asyncio.gather(*jobs)
+        rows = res[0]
+        account_rows = res[2] if demographic else []
         if len(rows) >= api.ANALYTICS_MAX_ELEMENTS:
             hinweise.append(
                 f"LinkedIn hat die Höchstzahl von {api.ANALYTICS_MAX_ELEMENTS} Zeilen geliefert; "
@@ -587,6 +631,22 @@ async def get_analytics(
                     hinweise.append(f"{f} fehlt in {len(rows) - have} von {len(rows)} Zeilen.")
 
         values = list(dict.fromkeys((r.get("pivotValues") or [None])[0] for r in rows))
+
+        # Eine Rangfolge für alles (Sortierung, max_rows, Kürzung, Namenssuche): Kosten,
+        # sonst Impressionen, sonst die erste angefragte Kennzahl.
+        rank = next((f for f in ("costInLocalCurrency", "impressions") if f in fields), fields[0])
+        rank_label = {"costInLocalCurrency": "Kosten", "impressions": "Impressionen"}.get(rank, rank)
+
+        # Summe je Wert über alle Zeiträume; Grundlage für Rangfolge und max_rows.
+        groups: dict = {}
+        for r in rows:
+            groups.setdefault((r.get("pivotValues") or [None])[0], []).append(r)
+        value_rank = {pv: sum(_num(r.get(rank)) for r in rs) for pv, rs in groups.items()}
+        # max_rows wählt Werte (Kampagnen, Anzeigen, …), nicht einzelne Zeilen: bei
+        # Zeitreihen bleiben so alle Zeiträume eines Werts erhalten.
+        top = None
+        if max_rows and len(groups) > max_rows:
+            top = set(sorted(groups, key=lambda pv: -value_rank[pv])[:max_rows])
 
         # Grundsatz 1: Pfad bzw. Klartext je Wert
         labels: dict[str, dict] = {}
@@ -608,13 +668,20 @@ async def get_analytics(
                 if v:
                     labels[v] = ctx.path(account=api.urn_id(v))
         else:
-            resolved, missing = await names.resolve([v for v in values if v])
-            for v in values:
-                if v:
-                    labels[v] = {"name": resolved.get(v)} if resolved.get(v) else {}
-            unresolved = sum(1 for v in values if v and str(v).startswith("urn:li:") and not resolved.get(v))
+            # Namen nur für Einträge nachschlagen, die in der Antwort landen können;
+            # bei Unternehmen oder Jobtiteln sind es sonst Tausende.
+            ordered = sorted((v for v in values if v), key=lambda v: -value_rank.get(v, 0))
+            wanted = [v for v in ordered if v in top] if top else ordered[:NAME_LOOKUP_LIMIT]
+            resolved, missing = await names.resolve(wanted)
+            for v in wanted:
+                if resolved.get(v):
+                    labels[v] = {"name": resolved[v]}
+            unresolved = sum(1 for v in wanted if str(v).startswith("urn:li:") and not resolved.get(v))
             if unresolved:
-                hinweise.append(f"{unresolved} von {len(values)} Werten ohne Klartext von LinkedIn; dort steht die Kennung.")
+                hinweise.append(f"{unresolved} von {len(wanted)} nachgeschlagenen Werten ohne Klartext "
+                                "von LinkedIn; dort steht die Kennung.")
+            if missing:
+                hinweise.append("Namen nicht nachschlagbar: " + "; ".join(missing))
         hinweise += ctx.problems
 
         currencies = {c for c in (a.get("currency") for a in ctx.accounts.values()) if c}
@@ -633,11 +700,6 @@ async def get_analytics(
             row.update(_derived(r))
             return _drop_none(row)
 
-        # Eine Rangfolge für alles (Sortierung, max_rows, Kürzung): Kosten, sonst
-        # Impressionen, sonst die erste angefragte Kennzahl.
-        rank = next((f for f in ("costInLocalCurrency", "impressions") if f in fields), fields[0])
-        rank_label = {"costInLocalCurrency": "Kosten", "impressions": "Impressionen"}.get(rank, rank)
-
         rows.sort(key=lambda r: (_date_str((r.get("dateRange") or {}).get("start")) or "",
                                  -_num(r.get(rank))))
         out_rows = [build(r) for r in rows]
@@ -652,14 +714,21 @@ async def get_analytics(
             return t
 
         tot = totals_of(rows)
-        summen = {f: _clean(f, v) for f, v in tot.items()}
-        summen.update(_derived(tot))
-
-        # Summe je Wert über alle Zeiträume; Grundlage für Rangfolge und max_rows.
-        groups: dict = {}
-        for r in rows:
-            groups.setdefault((r.get("pivotValues") or [None])[0], []).append(r)
-        value_rank = {pv: sum(_num(r.get(rank)) for r in rs) for pv, rs in groups.items()}
+        summen = gesamt = abdeckung = zeilensumme = None
+        if demographic:
+            real = totals_of(account_rows)
+            gesamt = {f: _clean(f, v) for f, v in real.items()}
+            gesamt.update(_derived(real))
+            zeilensumme = {f: _clean(f, v) for f, v in tot.items()}
+            abdeckung = {f: _ratio(tot[f], real[f], 100, 1) for f in tot if _num(real.get(f)) > 0}
+            hinweise.append(
+                "Demografie: Die Zeilen überschneiden sich oder lassen Teile weg, ihre Summe ist "
+                "kein Gesamtwert. Maßgeblich ist 'gesamt_laut_konten'; 'abdeckung_prozent' zeigt, "
+                "welchen Anteil davon die Zeilen zusammen erfassen."
+            )
+        else:
+            summen = {f: _clean(f, v) for f, v in tot.items()}
+            summen.update(_derived(tot))
 
         je_wert = None
         if time_granularity != "ALL" and len(values) > 1:
@@ -671,10 +740,7 @@ async def get_analytics(
             je_wert.sort(key=lambda x: -value_rank.get(x.get("wert"), 0))
 
         total_rows = len(out_rows)
-        # max_rows wählt Werte (Kampagnen, Anzeigen, …), nicht einzelne Zeilen: bei
-        # Zeitreihen bleiben so alle Zeiträume eines Werts erhalten.
-        if max_rows and len(groups) > max_rows:
-            top = set(sorted(groups, key=lambda pv: -value_rank[pv])[:max_rows])
+        if top:
             out_rows = [x for x in out_rows if x.get("wert") in top]
             if je_wert:
                 je_wert = [x for x in je_wert if x.get("wert") in top]
@@ -694,6 +760,9 @@ async def get_analytics(
                 "zeitraster": time_granularity,
                 "anzahl_zeilen_gesamt": total_rows,
                 "summen": summen,
+                "gesamt_laut_konten": gesamt,
+                "summe_der_zeilen": zeilensumme,
+                "abdeckung_prozent": abdeckung,
                 "summen_je_wert": je_wert,
                 "zeilen": out_rows,
                 "hinweise": hinweise,
@@ -717,6 +786,7 @@ async def list_metrics() -> str:
             "standardsatz": DEFAULT_METRICS,
             "berechnet": {name: f"{num} / {den}" + (f" × {factor:g}" if factor != 1 else "")
                           for name, num, den, factor in DERIVED},
+            "einheiten": UNITS,
             "aufschluesselungen": PIVOT_LABEL,
             "nicht_bei_demografie": sorted(NON_DEMOGRAPHIC_ONLY),
             "nicht_summierbar": sorted(NON_ADDITIVE),

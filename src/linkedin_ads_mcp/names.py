@@ -82,6 +82,19 @@ def _staff_count(urn: str) -> str | None:
     return f"{lo}+ Beschäftigte" if hi >= 2**31 - 1 or hi == 0 else f"{lo}–{hi} Beschäftigte"
 
 
+def _company_size(value: str) -> str | None:
+    """LinkedIn liefert Unternehmensgrößen als Aufzählung, z. B. SIZE_51_TO_200."""
+    m = re.fullmatch(r"SIZE_(\d+)(?:_TO_(\d+)|_OR_MORE)?", str(value))
+    if not m:
+        return None
+    lo, hi = int(m.group(1)), m.group(2)
+    if hi:
+        return f"{lo:,}–{int(hi):,} Beschäftigte".replace(",", ".")
+    if str(value).endswith("_OR_MORE"):
+        return f"{lo:,}+ Beschäftigte".replace(",", ".")
+    return "1 Person" if lo == 1 else f"{lo} Beschäftigte"
+
+
 def _label(entity: dict) -> str | None:
     for key in ("name", "defaultLocalizedName", "localizedName", "title"):
         v = entity.get(key)
@@ -178,6 +191,10 @@ async def resolve(urns: list[str]) -> tuple[dict[str, str], list[str]]:
             continue
         if u in _cache:
             found[u] = _cache[u]
+            continue
+        size = _company_size(u)
+        if size:
+            found[u] = size
             continue
         t = urn_type(u)
         if t == "staffCountRange":
